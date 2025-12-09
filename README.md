@@ -8,7 +8,7 @@
 - [x] Streaming message
 - [x] Redraw UI on demand (explain in [here](docs/redraw_ui_on_demand.md))
 - [ ] Allow agent to modify code
-- [ ] Allow to compare code before apply
+- [ ] Allow to run file diff before applying the changes
 
 ## How to use
 
