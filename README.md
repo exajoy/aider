@@ -1,6 +1,6 @@
 # Aider - An AI coding agent
 
-<img src="misc/screenshot_png" width="400" center/>
+<img src="misc/screenshot.png" width="400"/>
 
 ## Features
 
