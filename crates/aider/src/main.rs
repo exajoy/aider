@@ -1,24 +1,17 @@
+use aider::AppEvent;
 use aider::{MessageStream, agent::openai::CodeAgent};
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    style::Stylize,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, EventStream, KeyCode};
 use dotenvy::dotenv;
+use futures_util::StreamExt;
 use ratatui::{
-    DefaultTerminal, Frame, Terminal,
-    backend::CrosstermBackend,
+    DefaultTerminal,
     buffer::Buffer,
     layout::{self, Alignment, Constraint, Layout, Rect},
     style::{Color, Style},
-    text::{self, Line, Masked, Span},
-    widgets::{self, Block, Borders, List, ListItem, Paragraph, ScrollbarState, Widget, Wrap},
+    text::{self, Line},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Widget},
 };
-use std::{
-    io,
-    time::{Duration, Instant},
-};
+use std::io;
 use tokio::sync::mpsc::{self, Receiver};
 
 #[derive(Debug)]
@@ -40,37 +33,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     color_eyre::install()?;
 
     dotenv().ok();
-    let (tx, rx) = mpsc::channel::<MessageStream>(32);
 
     let terminal = ratatui::init();
-    let app_result = App::new(rx, tx).run(terminal).await;
+    let app_result = App::new().run(terminal).await;
     ratatui::restore();
     app_result
 }
 #[derive(Debug)]
 struct App {
     should_exit: bool,
-    scroll: u16,
-    last_tick: Instant,
-    rx: mpsc::Receiver<MessageStream>,
-    tx: mpsc::Sender<MessageStream>,
-
+    event_rx: mpsc::Receiver<AppEvent>,
+    event_tx: mpsc::Sender<AppEvent>,
     state: AppState,
 }
 
 impl App {
-    /// The duration between each tick.
-    // const TICK_RATE: Duration = Duration::from_millis(250);
-    const TICK_RATE: Duration = Duration::from_millis(10);
-
     /// Create a new instance of the app.
-    fn new(rx: mpsc::Receiver<MessageStream>, tx: mpsc::Sender<MessageStream>) -> Self {
+    fn new() -> Self {
+        let (event_tx, event_rx) = mpsc::channel::<AppEvent>(32);
         Self {
             should_exit: false,
-            scroll: 0,
-            last_tick: Instant::now(),
-            rx,
-            tx,
+            event_rx,
+            event_tx,
             state: AppState::new(),
         }
     }
@@ -80,97 +64,97 @@ impl App {
         mut self,
         mut terminal: DefaultTerminal,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        while !self.should_exit {
-            terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
-            self.handle_events()?;
-            if self.last_tick.elapsed() >= Self::TICK_RATE {
-                self.on_tick();
-                self.last_tick = Instant::now();
+        terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
+        let tx = self.event_tx.clone();
+
+        {
+            tokio::spawn(async move {
+                let mut events = EventStream::new();
+                while let Some(Ok(ev)) = events.next().await {
+                    tx.send(AppEvent::Input(ev)).await.unwrap();
+                }
+            });
+        }
+        // This loop never draws.
+        // It only waits for events.
+        let tx = self.event_tx.clone();
+        loop {
+            match self.event_rx.recv().await {
+                Some(AppEvent::Input(ev)) => {
+                    self.handle_events(ev)?;
+
+                    tx.send(AppEvent::Redraw).await.unwrap();
+                    if self.should_exit {
+                        break;
+                    }
+                }
+                Some(AppEvent::IncomingMessage(msg)) => {
+                    match msg {
+                        MessageStream::Start => {
+                            self.state.messages.push("AI: ".to_string());
+                        }
+                        MessageStream::NextWord { word } => {
+                            if let Some(last) = self.state.messages.last_mut() {
+                                last.push_str(&word);
+                            }
+                        }
+                        MessageStream::Completed => {}
+                        MessageStream::Error { error } => {
+                            self.state.messages.push(format!("Error: {}", error));
+                        }
+                    }
+                    tx.send(AppEvent::Redraw).await.unwrap();
+                }
+                Some(AppEvent::Redraw) => {
+                    terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
+                }
+
+                None => break,
             }
         }
         Ok(())
     }
 
-    /// Handle events from the terminal.
-    fn handle_events(&mut self) -> io::Result<()> {
+    fn handle_events(&mut self, event: Event) -> io::Result<()> {
         let agent = CodeAgent::new_from_env();
 
-        if let Ok(message_stream) = self.rx.try_recv() {
-            match message_stream {
-                MessageStream::Start => {
-                    self.state.messages.push("AI: ".to_string());
+        if let event::Event::Key(key) = event {
+            match key.code {
+                event::KeyCode::Char(c) => {
+                    self.state.input.push(c);
                 }
-                MessageStream::NextWord { word } => {
-                    if let Some(last) = self.state.messages.last_mut() {
-                        last.push_str(&word);
+                event::KeyCode::Backspace => {
+                    self.state.input.pop();
+                }
+                event::KeyCode::Enter => {
+                    let user_msg = self.state.input.trim().to_string();
+                    if !user_msg.is_empty() {
+                        self.state
+                            .messages
+                            .push(format!("You: {}", self.state.input.clone()));
+                        // Spawn the agent request
+                        let tx_clone = self.event_tx.clone();
+                        let agent_clone = agent.clone();
+                        tokio::spawn(async move {
+                            agent_clone.stream_ai_response(&user_msg, tx_clone).await
+                        });
                     }
+                    self.state.input.clear();
                 }
-                MessageStream::Completed => {}
-                MessageStream::Error { error } => {
-                    self.state.messages.push(format!("Error: {}", error));
+                event::KeyCode::Esc => {
+                    self.should_exit = true;
                 }
+                _ => {}
             }
-            // self.state.messages.push(format!("AI: {}", chunk));
-            // // Append streamed characters
-            // if let Some(last) = self.state.messages.last_mut() {
-            //     last.push_str(&chunk); // append text piece-by-piece
-            // }
-        }
-
-        // let timeout = Self::TICK_RATE.saturating_sub(self.last_tick.elapsed());
-        // while event::poll(timeout)? {
-        while event::poll(Self::TICK_RATE)? {
-            if let event::Event::Key(key) = event::read()? {
-                match key.code {
-                    event::KeyCode::Char(c) => {
-                        self.state.input.push(c);
-                    }
-                    event::KeyCode::Backspace => {
-                        self.state.input.pop();
-                    }
-                    event::KeyCode::Enter => {
-                        let user_msg = self.state.input.trim().to_string();
-                        if !user_msg.is_empty() {
-                            self.state
-                                .messages
-                                .push(format!("You: {}", self.state.input.clone()));
-                            // Spawn the agent request
-                            let tx_clone = self.tx.clone();
-                            let agent_clone = agent.clone();
-                            tokio::spawn(async move {
-                                agent_clone.stream_ai_response(&user_msg, tx_clone).await
-                                // match agent_clone.send(&user_msg).await {
-                                //     Ok(resp) => {
-                                //         let _ = tx_clone.send(resp).await;
-                                //     }
-                                //     Err(e) => {
-                                //         let _ = tx_clone.send(format!("Error: {:?}", e)).await;
-                                //     }
-                                // }
-                            });
-                        }
-                        self.state.input.clear();
-                    }
-                    event::KeyCode::Esc => {
-                        self.should_exit = true;
-                    }
-                    _ => {}
+            match (key.code, key.modifiers) {
+                (event::KeyCode::Char('c'), event::KeyModifiers::CONTROL) => {
+                    self.should_exit = true;
                 }
-                match (key.code, key.modifiers) {
-                    (event::KeyCode::Char('c'), event::KeyModifiers::CONTROL) => {
-                        self.should_exit = true;
-                    }
-                    _ => {}
-                }
+                _ => {}
             }
         }
+        // }
         Ok(())
-    }
-
-    /// Update the app state on each tick.
-    fn on_tick(&mut self) {
-        self.scroll = (self.scroll + 1) % 10;
     }
 }
 

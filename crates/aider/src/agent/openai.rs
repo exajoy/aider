@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-use crate::MessageStream;
+use crate::{AppEvent, MessageStream};
 #[derive(Debug, Serialize)]
 struct OpenAIRequest {
     model: String,
@@ -44,7 +44,7 @@ impl CodeAgent {
     pub async fn stream_ai_response(
         &self,
         text: &str,
-        tx: tokio::sync::mpsc::Sender<MessageStream>,
+        tx: tokio::sync::mpsc::Sender<AppEvent>,
     ) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
 
@@ -73,7 +73,7 @@ impl CodeAgent {
                 buffer = buffer[pos + 1..].to_string();
 
                 if let Some(msg) = extract_text(&line) {
-                    let _ = tx.send(msg).await;
+                    let _ = tx.send(AppEvent::IncomingMessage(msg)).await;
                 }
             }
         }
