@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.4"
+authors = ["Dat Vo <vo9312@gmail.com>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+homepage = "https://github.com/exajoy/aider"
+repository = "https://github.com/exajoy/aider"
+
+[workspace.dependencies]

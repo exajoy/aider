@@ -1,0 +1,10 @@
+/target
+show_coverage.sh
+.DS_Store
+*.DS_Store
+ tarpaulin-report.html
+
+# nix generated files
+.crates.toml
+.crates2.json
+result
