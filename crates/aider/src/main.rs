@@ -1,18 +1,18 @@
 use aider::AppEvent;
 use aider::{MessageStream, agent::openai::CodeAgent};
-use crossterm::event::{self, Event, EventStream, KeyCode};
+use crossterm::event::{self, Event, EventStream};
 use dotenvy::dotenv;
 use futures_util::StreamExt;
 use ratatui::{
     DefaultTerminal,
     buffer::Buffer,
-    layout::{self, Alignment, Constraint, Layout, Rect},
+    layout::{self, Rect},
     style::{Color, Style},
-    text::{self, Line},
+    text::{self},
     widgets::{Block, Borders, List, ListItem, Paragraph, Widget},
 };
 use std::io;
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::mpsc::{self};
 
 #[derive(Debug)]
 struct AppState {

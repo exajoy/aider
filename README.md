@@ -1,5 +1,7 @@
 # Aider - An AI coding agent
 
+<img src="misc/screenshot_png" width="400" center/>
+
 ## Features
 
 - [x] Support Open AI API
