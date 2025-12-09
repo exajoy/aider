@@ -1,9 +1,21 @@
 [package]
 name = "aider"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+description = "Command-line interface"
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
+anyhow = "1.0.100"
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
+dotenvy = "0.15.7"
+futures-util = "0.3.31"
 ratatui = "0.29.0"
+reqwest.workspace = true
+serde = "1.0.228"
+serde_json = "1.0.145"
+tokio = { version = "1", features = ["full"] }

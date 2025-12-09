@@ -8,3 +8,5 @@ show_coverage.sh
 .crates.toml
 .crates2.json
 result
+
+.env
