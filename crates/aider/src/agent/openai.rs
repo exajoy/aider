@@ -3,7 +3,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-use crate::{AppEvent, MessageStream};
+use crate::event::message_stream_event::MessageStreamEvent;
+
 #[derive(Debug, Serialize)]
 struct OpenAIRequest {
     model: String,
@@ -44,7 +45,7 @@ impl CodeAgent {
     pub async fn stream_ai_response(
         &self,
         text: &str,
-        tx: tokio::sync::mpsc::Sender<AppEvent>,
+        tx: tokio::sync::mpsc::Sender<MessageStreamEvent>,
     ) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
 
@@ -72,8 +73,8 @@ impl CodeAgent {
                 let line = buffer[..pos].trim().to_string();
                 buffer = buffer[pos + 1..].to_string();
 
-                if let Some(msg) = extract_text(&line) {
-                    let _ = tx.send(AppEvent::IncomingMessage(msg)).await;
+                if let Some(mse) = extract_text(&line) {
+                    let _ = tx.send(mse).await;
                 }
             }
         }
@@ -81,7 +82,7 @@ impl CodeAgent {
         Ok(())
     }
     pub async fn send(&self, text: &str) -> anyhow::Result<String> {
-        let body = OpenAIRequest {
+        let req = OpenAIRequest {
             model: "gpt-4.1-mini".to_string(),
             input: text.to_string(),
             stream: false,
@@ -91,7 +92,7 @@ impl CodeAgent {
             .client
             .post("https://api.openai.com/v1/responses")
             .bearer_auth(&self.api_key)
-            .json(&body)
+            .json(&req)
             .send()
             .await?
             .error_for_status()?;
@@ -101,48 +102,50 @@ impl CodeAgent {
         let output = parsed
             .output
             .get(0)
-            .and_then(|o| o.content.get(0))
-            .and_then(|c| c.text.as_ref())
+            .and_then(|out| out.content.get(0))
+            .and_then(|content| content.text.as_ref())
             .unwrap_or(&"<no response>".into())
             .clone();
 
         Ok(output)
     }
 }
-fn extract_text(sse: &str) -> Option<MessageStream> {
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum StreamEvent {
+    #[serde(rename = "response.created")]
+    Created {
+        sequence_number: Option<u64>,
+        // we ignore other fields for simplicity
+    },
+    #[serde(rename = "response.completed")]
+    Completed { sequence_number: Option<u64> },
+    #[serde(rename = "response.output_text.delta")]
+    OutputTextDelta { delta: String },
+
+    #[serde(rename = "response.refusal.delta")]
+    RefusalDelta { delta: String },
+
+    #[serde(rename = "response.error")]
+    Error { error: serde_json::Value },
+
+    #[serde(other)]
+    Other,
+}
+fn extract_text(sse: &str) -> Option<MessageStreamEvent> {
     let json_str = sse.trim_start_matches("data: ").trim();
-
-    #[derive(Debug, Deserialize)]
-    #[serde(tag = "type")]
-    enum StreamEvent {
-        #[serde(rename = "response.created")]
-        Created {
-            sequence_number: Option<u64>,
-            // we ignore other fields for simplicity
-        },
-        #[serde(rename = "response.completed")]
-        Completed { sequence_number: Option<u64> },
-        #[serde(rename = "response.output_text.delta")]
-        OutputTextDelta { delta: String },
-
-        #[serde(rename = "response.refusal.delta")]
-        RefusalDelta { delta: String },
-
-        #[serde(rename = "response.error")]
-        Error { error: serde_json::Value },
-
-        #[serde(other)]
-        Other,
-    }
 
     let event: StreamEvent = serde_json::from_str(json_str).ok()?;
 
     match event {
-        StreamEvent::OutputTextDelta { delta } => Some(MessageStream::NextWord { word: delta }),
-        StreamEvent::RefusalDelta { delta } => Some(MessageStream::NextWord { word: delta }),
-        StreamEvent::Created { sequence_number: _ } => Some(MessageStream::Start),
-        StreamEvent::Completed { sequence_number: _ } => Some(MessageStream::Completed),
-        StreamEvent::Error { error } => Some(MessageStream::Error {
+        StreamEvent::OutputTextDelta { delta } => {
+            Some(MessageStreamEvent::NextWord { word: delta })
+        }
+        StreamEvent::RefusalDelta { delta } => Some(MessageStreamEvent::NextWord { word: delta }),
+        StreamEvent::Created { sequence_number: _ } => Some(MessageStreamEvent::Start),
+        StreamEvent::Completed { sequence_number: _ } => Some(MessageStreamEvent::Completed),
+        StreamEvent::Error { error } => Some(MessageStreamEvent::Error {
             error: error.to_string(),
         }),
         _ => {
