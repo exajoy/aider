@@ -1,4 +1,4 @@
-# Aider - An AI coding agent
+# Aider - An Command line LLM Chat interface
 
 <img src="misc/screen_recording.gif" width="1000"/>
 
